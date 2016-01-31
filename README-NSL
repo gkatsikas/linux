@@ -1,0 +1,59 @@
+Linux Source
+======
+
+### This repository contains a Linux distribution based on Linux version 3.13.8 taken by: https://www.kernel.org/pub/linux/kernel/v3.x/linux-3.13.8.tar.xz
+This distribution has an exhanced scheduler that achieves better performance for NFV services.
+
+Follow the guidelines below to compile and install this distribution to your system.
+
+  1. Generate the kernel configuration file
+     * `make menuconfig`: Press Save to generate .config
+  2. Open .config and make sure the following parameters are set:
+	#### Custom NFV scheduler
+		CONFIG_SCHED_ORDERED=y
+
+	#### Network Drivers
+		CONFIG_IXGBE=m
+		CONFIG_IXGBE_HWMON=y
+		CONFIG_IXGBE_DCA=y
+		CONFIG_IXGBEVF=m
+		CONFIG_E1000=m
+		CONFIG_E1000E=m
+		CONFIG_IGB=m
+		CONFIG_VIRTIO_NET=m
+
+	#### Xen virtualization
+		CONFIG_XEN_NETDEV_BACKEND=m
+		CONFIG_XEN_NETDEV_FRONTEND=m
+
+	#### Linux Perf tool
+		CONFIG_PERF_EVENTS=y
+		CONFIG_HAVE_PERF_EVENTS=y
+		CONFIG_HAVE_PERF_EVENTS_NMI=y
+		CONFIG_HAVE_PERF_REGS=y
+		CONFIG_HAVE_PERF_USER_STACK_DUMP=y
+		CONFIG_PROC_PAGE_MONITOR=y
+
+	#### Intel DPDK
+		CONFIG_HUGETLBFS=y
+		CONFIG_UIO=y
+		CONFIG_HPET=y
+		CONFIG_HPET_MMAP=y
+
+  2. `make -j 16`
+     * 16 corresponds to the number of available CPU cores. It speeds up the compilation.
+  3. `make modules`
+  4. `make modules_install`
+  5. `make install`
+     * At this point, your kenrel is installed and you can boot it.
+     * Check `/boot/grub/grub.cfg` to find the actual order of this kernel
+     * Go to `/etc/default/grub` and apply the order such that you boot this kernel next time:
+         * `GRUB_DEFAULT="1>order"`
+  6. If you want to generate the headers:
+     * `cd /usr/src/linux-image-3.13.0`
+     * `make headers_install ARCH=x86_64 INSTALL_HDR_PATH=/usr/include`
+     * `make-kpkg --rootcmd fakeroot kernel_image kernel_headers`
+     * Two .deb files are created under /usr/src/:
+  7. To install these packages do:
+     * dpkg -i linux-image-3.13.0.deb
+     * dpkg -i linux-headers-3.13.0.deb

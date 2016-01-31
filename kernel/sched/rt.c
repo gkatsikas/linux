@@ -3,11 +3,26 @@
  * policies)
  */
 
-#include "sched.h"
 
+#include "sched.h"
 #include <linux/slab.h>
+#include <linux/sched/sysctl.h>
+#include <linux/hashtable.h>
+#include <linux/printk.h>
 
 int sched_rr_timeslice = RR_TIMESLICE;
+
+/*
+ * The data structures to implement SCHED_RR_ORDERED policy.
+ * Check linux/sched/sysctl.h for more details.
+ */
+#ifdef CONFIG_SCHED_ORDERED
+#include <linux/sched/rt.h>
+unsigned int sysctl_sched_number_of_network_functions;
+unsigned int sysctl_sched_number_of_switches;
+unsigned int sysctl_sched_ordered_nf[SCHED_ORDERED_NF_QUEUE_SIZE];
+unsigned int sysctl_sched_switch[SCHED_ORDERED_SW_QUEUE_SIZE];
+#endif
 
 static int do_sched_rt_period_timer(struct rt_bandwidth *rt_b, int overrun);
 
@@ -84,6 +99,17 @@ void init_rt_rq(struct rt_rq *rt_rq, struct rq *rq)
 	rt_rq->rt_throttled = 0;
 	rt_rq->rt_runtime = 0;
 	raw_spin_lock_init(&rt_rq->rt_runtime_lock);
+
+#ifdef CONFIG_SCHED_ORDERED
+	rt_rq->pos_in_nf_list = 0;
+	rt_rq->pos_in_sw_list = 0;
+	sysctl_sched_number_of_network_functions = 0;
+	sysctl_sched_number_of_switches = 0;
+	sysctl_sched_ordered_nf[0] = 0;
+	sysctl_sched_switch[0] = 0;
+	for (i=0; i<SCHED_ORDERED_NF_QUEUE_SIZE+1; i++) { rt_rq->ordered_nf_array[i] = NULL; }
+	for (i=0; i<SCHED_ORDERED_SW_QUEUE_SIZE;   i++) { rt_rq->ordered_sw_array[i] = NULL; }
+#endif
 }
 
 #ifdef CONFIG_RT_GROUP_SCHED
@@ -1041,12 +1067,34 @@ void dec_rt_tasks(struct sched_rt_entity *rt_se, struct rt_rq *rt_rq)
 	dec_rt_group(rt_se, rt_rq);
 }
 
+#ifdef CONFIG_SCHED_ORDERED
+static int inline is_nf(int pid, struct rt_rq *rt_rq) {
+	int i;
+	for (i=0; i<sysctl_sched_number_of_network_functions; i++) {
+		if (pid == sysctl_sched_ordered_nf[i]) {
+			return i;
+		}
+	}
+	return -1;
+}
+static int inline is_sw(int pid, struct rt_rq *rt_rq) {
+	int i;
+	for (i=0; i<sysctl_sched_number_of_switches; i++) {
+		if (pid == sysctl_sched_switch[i]) {
+			return i;
+		}
+	}
+	return -1;
+}
+#endif
+
 static void __enqueue_rt_entity(struct sched_rt_entity *rt_se, bool head)
 {
 	struct rt_rq *rt_rq = rt_rq_of_se(rt_se);
 	struct rt_prio_array *array = &rt_rq->active;
 	struct rt_rq *group_rq = group_rt_rq(rt_se);
 	struct list_head *queue = array->queue + rt_se_prio(rt_se);
+
 
 	/*
 	 * Don't enqueue the group if its throttled, or when empty.
@@ -1114,6 +1162,7 @@ static void dequeue_rt_entity(struct sched_rt_entity *rt_se)
 		if (rt_rq && rt_rq->rt_nr_running)
 			__enqueue_rt_entity(rt_se, false);
 	}
+
 }
 
 /*
@@ -1122,6 +1171,12 @@ static void dequeue_rt_entity(struct sched_rt_entity *rt_se)
 static void
 enqueue_task_rt(struct rq *rq, struct task_struct *p, int flags)
 {
+#ifdef CONFIG_SCHED_ORDERED
+	int pid = p->pid;
+	int nf_idx, sw_idx;
+	struct rt_rq *rt_rq = &rq->rt;
+#endif
+
 	struct sched_rt_entity *rt_se = &p->rt;
 
 	if (flags & ENQUEUE_WAKEUP)
@@ -1129,14 +1184,33 @@ enqueue_task_rt(struct rq *rq, struct task_struct *p, int flags)
 
 	enqueue_rt_entity(rt_se, flags & ENQUEUE_HEAD);
 
+#ifdef CONFIG_SCHED_ORDERED
+	nf_idx = is_nf(pid, rt_rq);
+	sw_idx = is_sw(pid, rt_rq);
+
+	if ( nf_idx >= 0 ) {
+		rt_rq->ordered_nf_array[nf_idx] = p;
+	}
+	else if ( sw_idx >= 0 ) {
+		rt_rq->ordered_sw_array[sw_idx] = p;
+	}
+	else if (!task_current(rq,p) && p->nr_cpus_allowed > 1)
+		enqueue_pushable_task(rq, p);
+#else
 	if (!task_current(rq, p) && p->nr_cpus_allowed > 1)
 		enqueue_pushable_task(rq, p);
+#endif
 
 	inc_nr_running(rq);
 }
 
 static void dequeue_task_rt(struct rq *rq, struct task_struct *p, int flags)
 {
+#ifdef CONFIG_SCHED_ORDERED
+	struct rt_rq *rt_rq = &rq->rt;
+	int pid = p->pid;
+	int nf_idx, sw_idx;
+#endif
 	struct sched_rt_entity *rt_se = &p->rt;
 
 	update_curr_rt(rq);
@@ -1145,6 +1219,17 @@ static void dequeue_task_rt(struct rq *rq, struct task_struct *p, int flags)
 	dequeue_pushable_task(rq, p);
 
 	dec_nr_running(rq);
+#ifdef CONFIG_SCHED_ORDERED
+	nf_idx = is_nf(pid, rt_rq);
+	sw_idx = is_sw(pid, rt_rq);
+
+	if ( nf_idx >= 0 ) {
+		rt_rq->ordered_nf_array[nf_idx] = NULL;
+	}
+	else if ( sw_idx >= 0 ) {
+		rt_rq->ordered_sw_array[sw_idx] = NULL;
+	}
+#endif
 }
 
 /*
@@ -1301,8 +1386,8 @@ static struct sched_rt_entity *pick_next_rt_entity(struct rq *rq,
 	BUG_ON(idx >= MAX_RT_PRIO);
 
 	queue = array->queue + idx;
-	next = list_entry(queue->next, struct sched_rt_entity, run_list);
 
+	next = list_entry(queue->next, struct sched_rt_entity, run_list);
 	return next;
 }
 
@@ -1334,11 +1419,61 @@ static struct task_struct *_pick_next_task_rt(struct rq *rq)
 
 static struct task_struct *pick_next_task_rt(struct rq *rq)
 {
-	struct task_struct *p = _pick_next_task_rt(rq);
+
+	struct task_struct *p;
+#ifdef CONFIG_SCHED_ORDERED
+	struct rt_rq *rt_rq;
+	struct task_struct *next_task_in_list;
+	int pos_in_nf_list, pos_in_sw_list;
+	rt_rq = &rq->rt;
+	pos_in_nf_list = rt_rq->pos_in_nf_list;
+	pos_in_sw_list = rt_rq->pos_in_sw_list;
+
+	/*
+	 * This should be more integrated with the rest and not return that early
+	 */
+	if ( sysctl_sched_number_of_network_functions && pos_in_nf_list ) {
+		/* We're done with the SW threads, select next NF */
+		if ( pos_in_sw_list == sysctl_sched_number_of_switches || !sysctl_sched_number_of_switches ) {
+			/* Find next task in ordered list */
+			next_task_in_list = rt_rq->ordered_nf_array[pos_in_nf_list];
+			/* Move pointers */
+			rt_rq->pos_in_sw_list = 0;
+			rt_rq->pos_in_nf_list++;
+		}
+		/* Go to next SW PID */
+		else {
+			next_task_in_list = rt_rq->ordered_sw_array[pos_in_sw_list];
+			rt_rq->pos_in_sw_list++;
+		}
+
+		if(next_task_in_list && next_task_in_list->state==0) {
+			next_task_in_list->se.exec_start = rq_clock_task(rq);
+			requeue_task_rt(rq, next_task_in_list, 0); // Put task back to the end of the queue
+			dequeue_pushable_task(rq, next_task_in_list); //Removes tasks from pushable
+			return next_task_in_list;
+		}
+		else {
+			rt_rq->pos_in_sw_list = 0;
+			rt_rq->pos_in_nf_list = 0;
+		}
+	}
+#endif
+
+	p = _pick_next_task_rt(rq);
+
+#ifdef CONFIG_SCHED_ORDERED
+
+	/* If this is the first process increment the pointer */
+	if ( p && sysctl_sched_number_of_network_functions && (p->pid == sysctl_sched_ordered_nf[0])) {
+		rt_rq->pos_in_nf_list = 1;
+	}
+#endif
 
 	/* The running task is never eligible for pushing */
-	if (p)
+	if (p) {
 		dequeue_pushable_task(rq, p);
+	}
 
 #ifdef CONFIG_SMP
 	/*

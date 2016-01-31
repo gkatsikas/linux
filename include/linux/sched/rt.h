@@ -61,4 +61,13 @@ extern void normalize_rt_tasks(void);
  */
 #define RR_TIMESLICE		(100 * HZ / 1000)
 
+/*
+ * The size of the static arrays to host the NF and Switch PIDs.
+ * These arrays will appear to /proc/sys/kernel/sched_* (check sysctl.c)
+ */
+#ifdef CONFIG_SCHED_ORDERED
+#define SCHED_ORDERED_NF_QUEUE_SIZE 200
+#define SCHED_ORDERED_SW_QUEUE_SIZE 50
+#endif
+
 #endif /* _SCHED_RT_H */

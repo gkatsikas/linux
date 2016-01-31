@@ -62,6 +62,7 @@
 #include <linux/capability.h>
 #include <linux/binfmts.h>
 #include <linux/sched/sysctl.h>
+#include <linux/kexec.h>
 
 #include <asm/uaccess.h>
 #include <asm/processor.h>
@@ -113,9 +114,6 @@ extern int sysctl_nr_open_min, sysctl_nr_open_max;
 #ifndef CONFIG_MMU
 extern int sysctl_nr_trim_pages;
 #endif
-#ifdef CONFIG_BLOCK
-extern int blk_iopoll_enabled;
-#endif
 
 /* Constants used for minimum and  maximum */
 #ifdef CONFIG_LOCKUP_DETECTOR
@@ -138,10 +136,14 @@ static unsigned long dirty_bytes_min = 2 * PAGE_SIZE;
 /* this is needed for the proc_dointvec_minmax for [fs_]overflow UID and GID */
 static int maxolduid = 65535;
 static int minolduid;
-static int min_percpu_pagelist_fract = 8;
 
 static int ngroups_max = NGROUPS_MAX;
 static const int cap_last_cap = CAP_LAST_CAP;
+
+/*this is needed for proc_doulongvec_minmax of sysctl_hung_task_timeout_secs */
+#ifdef CONFIG_DETECT_HUNG_TASK
+static unsigned long hung_task_timeout_max = (LONG_MAX/HZ);
+#endif
 
 #ifdef CONFIG_INOTIFY_USER
 #include <linux/inotify.h>
@@ -432,6 +434,37 @@ static struct ctl_table kern_table[] = {
 		.extra2		= &one,
 	},
 #endif
+#ifdef CONFIG_SCHED_ORDERED
+	#include <linux/sched/rt.h>
+	{
+		.procname   = "sched_nb_nf_pids",
+		.data       = &sysctl_sched_number_of_network_functions,
+		.maxlen     = sizeof(unsigned int),
+		.mode       = 0644,
+		.proc_handler = proc_dointvec,
+	},
+	{
+		.procname   = "sched_nf_pids",
+		.data       = &sysctl_sched_ordered_nf[0],
+		.maxlen     = SCHED_ORDERED_NF_QUEUE_SIZE*sizeof(unsigned int),
+		.mode       = 0644,
+		.proc_handler = proc_dointvec,
+	},
+	{
+		.procname   = "sched_nb_sw_pids",
+		.data       = &sysctl_sched_number_of_switches,
+		.maxlen     = sizeof(unsigned int),
+		.mode       = 0644,
+		.proc_handler = proc_dointvec,
+	},
+	{
+		.procname   = "sched_sw_pids",
+		.data       = &sysctl_sched_switch[0],
+		.maxlen     = SCHED_ORDERED_SW_QUEUE_SIZE*sizeof(unsigned int),
+		.mode       = 0644,
+		.proc_handler = proc_dointvec,
+	},
+#endif
 #ifdef CONFIG_CFS_BANDWIDTH
 	{
 		.procname	= "sched_cfs_bandwidth_slice_us",
@@ -612,6 +645,18 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(__disable_trace_on_warning),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
+	},
+#endif
+#ifdef CONFIG_KEXEC
+	{
+		.procname	= "kexec_load_disabled",
+		.data		= &kexec_load_disabled,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		/* only handle a transition from default "0" to "1" */
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &one,
+		.extra2		= &one,
 	},
 #endif
 #ifdef CONFIG_MODULES
@@ -980,6 +1025,7 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(unsigned long),
 		.mode		= 0644,
 		.proc_handler	= proc_dohung_task_timeout_secs,
+		.extra2		= &hung_task_timeout_max,
 	},
 	{
 		.procname	= "hung_task_warnings",
@@ -1073,15 +1119,6 @@ static struct ctl_table kern_table[] = {
 	{
 		.procname	= "kmemcheck",
 		.data		= &kmemcheck_enabled,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
-	},
-#endif
-#ifdef CONFIG_BLOCK
-	{
-		.procname	= "blk_iopoll",
-		.data		= &blk_iopoll_enabled,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
@@ -1295,7 +1332,7 @@ static struct ctl_table vm_table[] = {
 		.maxlen		= sizeof(percpu_pagelist_fraction),
 		.mode		= 0644,
 		.proc_handler	= percpu_pagelist_fraction_sysctl_handler,
-		.extra1		= &min_percpu_pagelist_fract,
+		.extra1		= &zero,
 	},
 #ifdef CONFIG_MMU
 	{

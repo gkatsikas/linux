@@ -7,6 +7,7 @@
 #include <linux/stop_machine.h>
 #include <linux/tick.h>
 #include <linux/slab.h>
+#include <linux/hashtable.h>
 
 #include "cpupri.h"
 #include "cpuacct.h"
@@ -361,6 +362,17 @@ struct rt_rq {
 
 	struct rq *rq;
 	struct task_group *tg;
+#endif
+
+#ifdef CONFIG_SCHED_ORDERED
+	/* Pointer towards the current positions in the list of ordered process */
+	int pos_in_nf_list;
+	int pos_in_sw_list;
+
+	/* Pointers storing the structures */
+	/* The 201st element is always NULL and indicates the end of the array */
+	struct task_struct* ordered_nf_array[SCHED_ORDERED_NF_QUEUE_SIZE + 1]; //TODO: make it less dirty
+	struct task_struct* ordered_sw_array[SCHED_ORDERED_SW_QUEUE_SIZE];
 #endif
 };
 

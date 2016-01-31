@@ -92,6 +92,21 @@ extern unsigned int sysctl_sched_autogroup_enabled;
 
 extern int sched_rr_timeslice;
 
+/*
+ * The data structures required to implement the SCHED_RR_ORDERED policy
+ * on top of the existing real-time round-robin policy.
+ * 1) An array of NF PIDs is allocated. In this array PIDs should appear in order.
+ * 2) An array of Switch PIDs is also allocated.
+ * When a NF is scheduled, the next task will be selected by the SW array, then the next NF, etc.
+ */
+#ifdef CONFIG_SCHED_ORDERED
+#include <linux/sched/rt.h>
+extern unsigned int sysctl_sched_number_of_network_functions;
+extern unsigned int sysctl_sched_number_of_switches;
+extern unsigned int sysctl_sched_ordered_nf[SCHED_ORDERED_NF_QUEUE_SIZE];
+extern unsigned int sysctl_sched_switch[SCHED_ORDERED_SW_QUEUE_SIZE];
+#endif
+
 extern int sched_rr_handler(struct ctl_table *table, int write,
 		void __user *buffer, size_t *lenp,
 		loff_t *ppos);
